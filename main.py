@@ -19,11 +19,36 @@ TEMPLATES = {
 }
 
 PUBLIC_URL = os.getenv("PUBLIC_URL")
-
 if not PUBLIC_URL:
     raise RuntimeError("❌ PUBLIC_URL não configurada")
 
 PUBLIC_URL = PUBLIC_URL.rstrip("/")
+
+MAX_SIZE = (1024, 1024)
+
+# ================= FUNÇÕES =================
+def safe_remove_bg(img: Image.Image) -> Image.Image:
+    """Remove fundo sem quebrar a IA"""
+    try:
+        img_bytes = remove(img)
+        return Image.open(BytesIO(img_bytes)).convert("RGBA")
+    except Exception as e:
+        print("⚠️ rembg falhou, usando imagem original:", e)
+        return img.convert("RGBA")
+
+def split_front_back(img: Image.Image):
+    """Divide imagem frente + costas automaticamente"""
+    w, h = img.size
+    half = w // 2
+    front = img.crop((0, 0, half, h))
+    back = img.crop((half, 0, w, h))
+    return front, back
+
+def apply_template(img: Image.Image, tipo: str) -> Image.Image:
+    template = Image.open(TEMPLATES[tipo]).convert("RGBA")
+    img = img.resize(template.size)
+    template.paste(img, (0, 0), img)
+    return template
 
 # ================= PROCESSAMENTO =================
 @app.post("/process")
@@ -37,38 +62,47 @@ async def process_image(
     if tipo not in TEMPLATES:
         raise HTTPException(status_code=400, detail="Tipo inválido")
 
-    # Abrir imagem
     try:
         img = Image.open(file.file).convert("RGBA")
     except:
         raise HTTPException(status_code=400, detail="Imagem inválida")
 
-    # Remover fundo
-    try:
-        img_bytes = remove(img)
-        img = Image.open(BytesIO(img_bytes)).convert("RGBA")
-    except:
-        raise HTTPException(status_code=500, detail="Erro ao remover fundo")
+    # Reduz tamanho (anti-502)
+    img.thumbnail(MAX_SIZE)
 
-    # Ajustes visuais
-    img = ImageEnhance.Brightness(img).enhance(brilho)
-    img = ImageEnhance.Contrast(img).enhance(contraste)
+    # Decide se é frente + costas
+    is_double = img.width > img.height * 1.3
 
-    # Aplicar template
-    template = Image.open(TEMPLATES[tipo]).convert("RGBA")
-    img = img.resize(template.size)
-    template.paste(img, (0, 0), img)
+    results = []
 
-    # Salvar arquivo
-    uid = f"{uuid.uuid4()}.png"
-    out_path = f"output/{uid}"
-    template.save(out_path)
+    if is_double:
+        parts = split_front_back(img)
+    else:
+        parts = [img]
 
-    # URLs ABSOLUTAS (🔥 correção definitiva)
-    return {
-        "template_url": f"{PUBLIC_URL}/file/{uid}",
-        "preview_url": f"{PUBLIC_URL}/preview/{uid}"
-    }
+    for part in parts:
+        part = safe_remove_bg(part)
+        part = ImageEnhance.Brightness(part).enhance(brilho)
+        part = ImageEnhance.Contrast(part).enhance(contraste)
+        final_img = apply_template(part, tipo)
+
+        uid = f"{uuid.uuid4()}.png"
+        out_path = f"output/{uid}"
+        final_img.save(out_path)
+
+        results.append({
+            "template_url": f"{PUBLIC_URL}/file/{uid}",
+            "preview_url": f"{PUBLIC_URL}/preview/{uid}"
+        })
+
+    # Se tiver frente + costas, retorna lista
+    if len(results) > 1:
+        return {
+            "mode": "front_back",
+            "results": results
+        }
+
+    return results[0]
 
 # ================= DOWNLOAD =================
 @app.get("/file/{name}")
@@ -78,7 +112,7 @@ def get_file(name: str):
         raise HTTPException(status_code=404)
     return FileResponse(path, media_type="image/png")
 
-# ================= PREVIEW WEB =================
+# ================= PREVIEW =================
 @app.get("/preview/{name}")
 def preview(name: str):
     path = f"output/{name}"
@@ -86,35 +120,14 @@ def preview(name: str):
         raise HTTPException(status_code=404)
 
     return HTMLResponse(f"""
-    <!DOCTYPE html>
     <html>
-    <head>
-        <title>Preview da Roupa</title>
-        <style>
-            body {{
-                background: #111;
-                color: white;
-                text-align: center;
-                font-family: Arial;
-            }}
-            img {{
-                max-width: 90%;
-                margin-top: 20px;
-            }}
-            a {{
-                display: inline-block;
-                margin-top: 20px;
-                color: #00ff88;
-                font-size: 18px;
-                text-decoration: none;
-            }}
-        </style>
-    </head>
-    <body>
+      <body style="background:#111;color:white;text-align:center">
         <h2>Preview da Roupa Roblox</h2>
-        <img src="{PUBLIC_URL}/file/{name}" />
-        <br>
-        <a href="{PUBLIC_URL}/file/{name}" download>📥 Baixar Template</a>
-    </body>
+        <img src="{PUBLIC_URL}/file/{name}" style="max-width:90%"/>
+        <br><br>
+        <a href="{PUBLIC_URL}/file/{name}" download style="color:#0f0;font-size:18px">
+          📥 Baixar Template
+        </a>
+      </body>
     </html>
     """)
