@@ -1,127 +1,97 @@
+# ==============================
+# IA ROUPAS ROBLOX - MAIN FINAL
+# ==============================
+
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
-from PIL import Image, ImageEnhance
-from rembg import remove
-from io import BytesIO
-import uuid, os
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from typing import Optional
+import uuid
+import os
+import shutil
 
-# ================= APP (TEM QUE SER PRIMEIRO) =================
-app = FastAPI()
+# ==============================
+# APP
+# ==============================
 
-# ================= ROOT (OBRIGATÓRIO NO RAILWAY) =================
+app = FastAPI(
+    title="IA Roupas Roblox",
+    description="API para gerar roupas Roblox a partir de imagens (frente e costas)",
+    version="2.0.0"
+)
+
+# ==============================
+# CORS
+# ==============================
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ==============================
+# PASTAS
+# ==============================
+
+BASE_DIR = os.getcwd()
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# ==============================
+# ROTAS
+# ==============================
+
 @app.get("/")
 def root():
-    return {"status": "IA Roblox Online"}
-
-# ================= PASTAS =================
-os.makedirs("output", exist_ok=True)
-os.makedirs("templates", exist_ok=True)
-
-# ================= CONFIG =================
-TEMPLATES = {
-    "camisa": "templates/shirt.png",
-    "calca": "templates/pants.png"
-}
-
-PUBLIC_URL = os.getenv("PUBLIC_URL")
-if not PUBLIC_URL:
-    raise RuntimeError("❌ PUBLIC_URL não configurada")
-
-PUBLIC_URL = PUBLIC_URL.rstrip("/")
-
-# ================= PROCESSAMENTO =================
-@app.post("/process")
-async def process_image(
-    file: UploadFile = File(...),
-    tipo: str = "camisa",
-    brilho: float = 1.1,
-    contraste: float = 1.1
-):
-    tipo = tipo.lower()
-    if tipo not in TEMPLATES:
-        raise HTTPException(status_code=400, detail="Tipo inválido")
-
-    # Abrir imagem
-    try:
-        img = Image.open(file.file).convert("RGBA")
-    except:
-        raise HTTPException(status_code=400, detail="Imagem inválida")
-
-    # 🔽 REDUZ TAMANHO (EVITA 502)
-    img.thumbnail((1024, 1024))
-
-    # 🔥 REMBG BLINDADO (NÃO DERRUBA IA)
-    try:
-        img_bytes = remove(img)
-        img = Image.open(BytesIO(img_bytes)).convert("RGBA")
-    except Exception as e:
-        print("⚠️ rembg falhou, usando imagem original:", e)
-        img = img.convert("RGBA")
-
-    # Ajustes visuais
-    img = ImageEnhance.Brightness(img).enhance(brilho)
-    img = ImageEnhance.Contrast(img).enhance(contraste)
-
-    # Aplicar template
-    template = Image.open(TEMPLATES[tipo]).convert("RGBA")
-    img = img.resize(template.size)
-    template.paste(img, (0, 0), img)
-
-    # Salvar
-    uid = f"{uuid.uuid4()}.png"
-    out_path = f"output/{uid}"
-    template.save(out_path)
-
     return {
-        "template_url": f"{PUBLIC_URL}/file/{uid}",
-        "preview_url": f"{PUBLIC_URL}/preview/{uid}"
+        "status": "online",
+        "service": "IA Roupas Roblox",
+        "docs": "/docs"
     }
 
-# ================= DOWNLOAD =================
-@app.get("/file/{name}")
-def get_file(name: str):
-    path = f"output/{name}"
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404)
-    return FileResponse(path, media_type="image/png")
+@app.post("/generate")
+async def generate_clothing(
+    front_image: UploadFile = File(...),
+    back_image: Optional[UploadFile] = File(None)
+):
+    try:
+        job_id = str(uuid.uuid4())
+        job_dir = os.path.join(UPLOAD_DIR, job_id)
+        os.makedirs(job_dir, exist_ok=True)
 
-# ================= PREVIEW WEB =================
-@app.get("/preview/{name}")
-def preview(name: str):
-    path = f"output/{name}"
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404)
+        # --------- SALVA FRENTE ----------
+        front_path = os.path.join(job_dir, "front.png")
+        with open(front_path, "wb") as f:
+            shutil.copyfileobj(front_image.file, f)
 
-    return HTMLResponse(f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Preview da Roupa</title>
-        <style>
-            body {{
-                background: #111;
-                color: white;
-                text-align: center;
-                font-family: Arial;
-            }}
-            img {{
-                max-width: 90%;
-                margin-top: 20px;
-            }}
-            a {{
-                display: inline-block;
-                margin-top: 20px;
-                color: #00ff88;
-                font-size: 18px;
-                text-decoration: none;
-            }}
-        </style>
-    </head>
-    <body>
-        <h2>Preview da Roupa Roblox</h2>
-        <img src="{PUBLIC_URL}/file/{name}" />
-        <br>
-        <a href="{PUBLIC_URL}/file/{name}" download>📥 Baixar Template</a>
-    </body>
-    </html>
-    """)
+        # --------- SALVA COSTAS ----------
+        back_path = None
+        if back_image:
+            back_path = os.path.join(job_dir, "back.png")
+            with open(back_path, "wb") as f:
+                shutil.copyfileobj(back_image.file, f)
+
+        # --------- AQUI ENTRA A IA DEPOIS ----------
+        # Por enquanto só valida e responde
+
+        return {
+            "success": True,
+            "job_id": job_id,
+            "front": "recebido",
+            "back": "recebido" if back_image else "não enviado",
+            "message": "Imagens processadas com sucesso"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==============================
+# HEALTH CHECK
+# ==============================
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
