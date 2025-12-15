@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from PIL import Image, ImageEnhance
 from rembg import remove
@@ -7,18 +7,18 @@ import uuid, os
 
 app = FastAPI()
 
-# ----------------- PASTAS ----------------- #
 os.makedirs("output", exist_ok=True)
-os.makedirs("templates", exist_ok=True)  # Templates: shirt.png e pants.png
+os.makedirs("templates", exist_ok=True)
 
 TEMPLATES = {
     "camisa": "templates/shirt.png",
     "calca": "templates/pants.png"
 }
 
-# ----------------- ENDPOINT DE PROCESSAMENTO ----------------- #
+# ---------------- PROCESSAMENTO ---------------- #
 @app.post("/process")
 async def process_image(
+    request: Request,
     file: UploadFile = File(...),
     tipo: str = "camisa",
     brilho: float = 1.1,
@@ -26,79 +26,67 @@ async def process_image(
 ):
     tipo = tipo.lower()
     if tipo not in TEMPLATES:
-        raise HTTPException(status_code=400, detail=f"Tipo inválido: {tipo}")
+        raise HTTPException(status_code=400, detail="Tipo inválido")
 
     # Abrir imagem
     try:
         img = Image.open(file.file).convert("RGBA")
-    except Exception:
-        raise HTTPException(status_code=400, detail="Arquivo inválido")
+    except:
+        raise HTTPException(status_code=400, detail="Imagem inválida")
 
     # Remover fundo
     try:
         img_bytes = remove(img)
         img = Image.open(BytesIO(img_bytes)).convert("RGBA")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao remover fundo: {str(e)}")
+    except:
+        raise HTTPException(status_code=500, detail="Erro ao remover fundo")
 
-    # Brilho e contraste
+    # Ajustes
     img = ImageEnhance.Brightness(img).enhance(brilho)
     img = ImageEnhance.Contrast(img).enhance(contraste)
 
-    # Template
-    template_path = TEMPLATES[tipo]
-    if not os.path.exists(template_path):
-        raise HTTPException(status_code=500, detail="Template não encontrado")
-
-    template = Image.open(template_path).convert("RGBA")
+    # Aplicar template
+    template = Image.open(TEMPLATES[tipo]).convert("RGBA")
     img = img.resize(template.size)
     template.paste(img, (0, 0), img)
 
-    # Salvar arquivo final
-    uid = str(uuid.uuid4())
-    out_path = f"output/{uid}.png"
+    # Salvar
+    uid = f"{uuid.uuid4()}.png"
+    out_path = f"output/{uid}"
     template.save(out_path)
 
-    # Retorna JSON e HTML de preview
-    file_url = f"/file/{uid}.png"
-    html_preview = f"""
-    <html>
-        <head><title>Preview da roupa</title></head>
-        <body style="text-align:center;">
-            <h2>Preview - {tipo}</h2>
-            <img src="{file_url}" style="max-width:90%;height:auto;"/>
-            <p><a href="{file_url}" download>📥 Baixar imagem</a></p>
-        </body>
-    </html>
-    """
+    # 🔥 URL ABSOLUTA (CORREÇÃO PRINCIPAL)
+    base_url = str(request.base_url).rstrip("/")
+    file_url = f"{base_url}/file/{uid}"
+    preview_url = f"{base_url}/preview/{uid}"
 
     return {
         "template_url": file_url,
-        "preview_url": file_url,
-        "html_preview": html_preview
+        "preview_url": preview_url
     }
 
-# ----------------- ENDPOINT DE ARQUIVOS ----------------- #
+# ---------------- ARQUIVO ---------------- #
 @app.get("/file/{name}")
 def get_file(name: str):
-    file_path = f"output/{name}"
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
-    return FileResponse(file_path)
+    path = f"output/{name}"
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404)
+    return FileResponse(path)
 
-# ----------------- ENDPOINT DE PREVIEW NO NAVEGADOR ----------------- #
+# ---------------- PREVIEW WEB ---------------- #
 @app.get("/preview/{name}")
-def preview_file(name: str):
-    file_path = f"output/{name}"
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
-    html_content = f"""
+def preview(name: str):
+    path = f"output/{name}"
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404)
+
+    return HTMLResponse(f"""
     <html>
-        <head><title>Preview</title></head>
-        <body style="text-align:center;">
-            <img src="/file/{name}" style="max-width:90%;height:auto;"/>
-            <p><a href="/file/{name}" download>📥 Baixar imagem</a></p>
-        </body>
+      <body style="text-align:center;background:#111;color:white">
+        <h2>Preview da roupa</h2>
+        <img src="/file/{name}" style="max-width:90%"/>
+        <br><br>
+        <a href="/file/{name}" download style="color:#0f0">📥 Baixar</a>
+      </body>
     </html>
-    """
-    return HTMLResponse(content=html_content)
+    """)
