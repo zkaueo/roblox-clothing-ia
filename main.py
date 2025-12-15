@@ -1,3 +1,6 @@
+@app.get("/")
+def root():
+    return {"status": "IA Roblox Online"}
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from PIL import Image, ImageEnhance
@@ -131,3 +134,4 @@ def preview(name: str):
       </body>
     </html>
     """)
+
